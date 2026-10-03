@@ -1,12 +1,12 @@
-# Developmental PCN: Aprendizado Local, Motivação Intrínseca e Consolidação Sem Buffer — Prova de Conceito e Limites Empíricos
+# Developmental PCN: Aprendizado Local, Motivação Intrínseca e Consolidação Sem Buffer — Prova de Conceito, Limites Empíricos e Evolução do Mecanismo de Consolidação
 
-**Tipo:** Relatório técnico-científico de prova de conceito (proof-of-concept), com achado negativo documentado.
+**Tipo:** Relatório técnico-científico de prova de conceito (proof-of-concept), com achados negativos quantificados e uma segunda iteração de design documentada.
 **Data:** Setembro–Outubro de 2026.
-**Autores (processo):** Arquitetura concebida em debate estruturado entre dois agentes de IA (Claude Code e Antigravity, via Maestri); implementação conduzida sob fluxo Arquiteto/Executor, com verificação independente de cada entrega.
+**Autores (processo):** Arquitetura concebida em debate estruturado entre dois agentes de IA (Claude Code e Antigravity, via Maestri); implementação conduzida sob fluxo Arquiteto/Executor, com verificação independente de cada entrega; mecanismo de consolidação revisado numa segunda rodada de debate após o primeiro achado negativo.
 
 ## Resumo
 
-Modelos de linguagem de grande escala (LLMs) dependem de computação massiva porque separam memória de longo prazo (pesos, congelados após o treino) de memória de trabalho (contexto, descartada a cada sessão), forçando recomputação bruta via atenção a cada inferência. Este trabalho implementa e testa empiricamente uma arquitetura alternativa — a **Developmental PCN** — que unifica memória e cômputo num único substrato de pesos plásticos, aprendendo por regras estritamente locais (sem backpropagation global). A arquitetura tem quatro pilares: (1) um motor de Predictive Coding Network (PCN) matematicamente equivalente a backprop mas implementável com message passing local; (2) Active Inference como princípio unificador de percepção e ação; (3) Learning Progress como motivação intrínseca, substituindo erro de predição bruto; (4) consolidação via "sono" com replay generativo implícito e poda por precisão, sem buffer de experiências reais. Validamos cada pilar isoladamente com sucesso (Fases 1–4), obtendo: paridade com um baseline de backprop em classificação (-0.56 pontos percentuais); navegação bem-sucedida num ambiente simulado usando o mesmo substrato para memória e ação (100% de sucesso); resistência empírica ao "Noisy TV problem" via Learning Progress; e redução de 66.57% no esquecimento catastrófico via sono generativo. A tentativa de integrar os quatro pilares num único agente contínuo (Fase 5) **falhou em quatro iterações sucessivas**, revelando um limite genuíno: a ausência de um sinal de fronteira de tarefa (*task-free continual learning*) degrada tanto a convergência do modelo de mundo quanto a eficácia do mecanismo de consolidação. Esse achado negativo confirma, empiricamente, uma limitação que havia sido antecipada — mas não resolvida — na concepção teórica da arquitetura.
+Modelos de linguagem de grande escala (LLMs) dependem de computação massiva porque separam memória de longo prazo (pesos, congelados após o treino) de memória de trabalho (contexto, descartada a cada sessão), forçando recomputação bruta via atenção a cada inferência. Este trabalho implementa e testa empiricamente uma arquitetura alternativa — a **Developmental PCN** — que unifica memória e cômputo num único substrato de pesos plásticos, aprendendo por regras estritamente locais (sem backpropagation global). A arquitetura tem quatro pilares: (1) um motor de Predictive Coding Network (PCN) matematicamente equivalente a backprop mas implementável com message passing local; (2) Active Inference como princípio unificador de percepção e ação; (3) Learning Progress como motivação intrínseca, substituindo erro de predição bruto; (4) consolidação via "sono", sem buffer de experiências reais. Validamos cada pilar isoladamente com sucesso (Fases 1–4), obtendo: paridade com um baseline de backprop em classificação (-0.56 pontos percentuais); navegação bem-sucedida num ambiente simulado usando o mesmo substrato para memória e ação (100% de sucesso); resistência empírica ao "Noisy TV problem" via Learning Progress; e redução de 66.57% no esquecimento catastrófico via sono generativo (num cenário com fronteira de tarefa conhecida). A primeira tentativa de integrar os quatro pilares num único agente contínuo e *task-free* (Fase 5) **falhou em quatro iterações sucessivas**, com o mecanismo de consolidação original produzindo proteção próxima de zero independentemente da calibração — um limite estrutural, não um problema de ajuste fino. Uma segunda rodada de debate diagnosticou a causa raiz (um problema com nome na literatura, "generator forgetting") e propôs um mecanismo substituto, o **Dual-Weight PCN**, validado isoladamente com margem confortável (Fase 6). A reintegração desse mecanismo (Fase 7) produziu um resultado qualitativamente diferente: três iterações sucessivas de calibração elevaram a proteção contra esquecimento de 2.84% para 17.79% e depois 25.09% — uma trajetória monotonicamente crescente, não um platô em zero — ainda abaixo do limiar de 30% definido a priori, mas evidenciando um mecanismo que funciona e responde a mais dosagem, não um mecanismo estruturalmente incapaz. O trabalho conjunto documenta, portanto, duas gerações de uma mesma ideia: a primeira confirmou empiricamente um limite teórico já antecipado; a segunda avançou substancialmente dentro desse limite, sem ainda cruzá-lo por completo.
 
 ## 1. Introdução e Motivação
 
@@ -129,7 +129,34 @@ Foram necessárias quatro iterações, cada uma expondo uma camada mais profunda
 
 **Resultado final: bloqueado.** Conforme protocolo acordado, a quarta tentativa foi a última autorizada; o experimento foi documentado como achado negativo em vez de forçado a "passar" por meios artificiais.
 
-## 6. Discussão
+## 6. Fase 6 — Validação Isolada de um Mecanismo Substituto (Dual-Weight PCN)
+
+A Fase 5 revelou que a causa raiz do fracasso era o `SleepConsolidator` original rastrear uma única estatística gaussiana de observação, que por precisar ser responsiva o suficiente para ser útil no presente, inevitavelmente esquece o passado assim que a distribuição recente muda — uma instância do problema conhecido de "generator forgetting" em generative replay contínuo (Aljundi et al., "Task-Free Continual Learning", CVPR 2019). Uma segunda rodada de debate estruturado entre os dois agentes (ver [DEBATE_RODADA2.md](DEBATE_RODADA2.md)) considerou e descartou duas propostas (protótipos múltiplos ao estilo CoPE; sono disparado por Bayesian Online Changepoint Detection) antes de convergir no mecanismo **Dual-Weight PCN**: duas cópias dos pesos da PCN — uma *Fast Network* que aprende online normalmente, e uma *Slow Network* nunca treinada diretamente em dados, só atualizada via Polyak averaging (EMA) dos pesos da Fast. A divergência de energia entre as duas redes sobre a mesma transição (`delta`, suavizado por EMA escalar) serve de gatilho de changepoint — por ser relativo (dois modelos competindo no mesmo dado), resiste à exploração intra-tarefa do Learning Progress, ao contrário de um detector de erro absoluto.
+
+**Validação isolada** (sem RL, sem GridWorld, dados sintéticos — mesma disciplina que validou o `LearningProgressTracker` na Fase 3):
+
+| Teste | Critério | Resultado |
+|---|---|---|
+| Resistência a exploração intra-tarefa | pico de `smoothed_delta` ≤ 0.25 | **0.0014** |
+| Detecção de shift real de regime | cruza limiar em <100 passos, pico ≥ 1.0 | cruza em ~5 passos, **pico 2.63** |
+
+O detector funciona como um "detector de borda": dispara prontamente no momento da mudança real de regime, depois decai naturalmente de volta a zero conforme a Slow Network converge para a Fast — comportamento esperado e correto, não um defeito.
+
+## 7. Fase 7 — Reintegração: Um Achado Negativo Quantificado e Informativo
+
+Com o detector validado isoladamente, a Fase 7 reintegrou o mecanismo num agente de RL completo (mesma geometria balanceada 2×2 que funcionou melhor na Fase 5, objetivos nos cantos (0,0)/(4,4)), substituindo o `SleepConsolidator` antigo. Foram necessárias três iterações, cada uma movendo o resultado de forma mensurável:
+
+**Tentativa 1 (burst único).** A especificação original pedia que o changepoint disparasse um único burst de n sonhos no momento da borda de subida — replicando a ideia da Fase 4. Resultado: redução de apenas **2.84%**, muito abaixo do limiar de 30%. Diagnóstico: a Região B dura milhares de passos reais após o disparo; um burst único, não importa o tamanho, é diluído pelo volume de treino real subsequente sem nenhuma proteção contínua.
+
+**Tentativa 2 (ensaio contínuo).** Correção: em vez de um burst único, o sistema entra em um "modo de proteção" permanente após o primeiro disparo — a partir daí, todo passo real subsequente vem acompanhado de 1 passo adicional de ensaio (sonhar + treinar), pelo resto do experimento (sem oráculo de fim de tarefa, por desenho). Combinado com uma redução de `beta_slow` em ordens de magnitude (de 0.02 para 0.00005, mantendo a Slow Network relevante por mais tempo), a redução subiu para **17.79%**.
+
+**Tentativa 3 (proporção 4:1).** Aumentando a proporção de ensaio por passo real de 1:1 para 4:1, a redução chegou a **25.09%** — ainda abaixo do limiar de 30%, mas numa trajetória monotonicamente crescente e bem caracterizada: **2.84% → 17.79% → 25.09%**.
+
+Por acordo prévio entre arquiteto e executor, essa foi a última tentativa autorizada nesta fase. O resultado final é um **achado negativo quantificado**: o mecanismo Dual-Weight PCN funciona e protege substancialmente mais conhecimento do que o `SleepConsolidator` original (que não produzia proteção mensurável nenhuma na Fase 5), mas não o suficiente para cruzar o limiar de 30% definido a priori, dentro do orçamento de tentativas estabelecido. Não está determinado se aumentar ainda mais a proporção de ensaio cruzaria o limiar eventualmente, ou se existe um platô — essa é uma pergunta aberta explícita para trabalho futuro (§10), discutida com mais contexto em §8.1.
+
+Nota metodológica: a taxa de sucesso de navegação permaneceu em 0% em todas as condições pós-Região-B (com e sem sono), reconfirmando a lição da Fase 5 de que essa métrica é insensível ao tipo de degradação medido — todas as comparações desta fase usam MSE direto, não taxa de sucesso.
+
+## 8. Discussão
 
 O resultado mais importante deste trabalho não é um número de acurácia — é a **confirmação empírica, em código executável, de uma limitação teórica identificada antes de qualquer implementação**: o debate original registrou explicitamente, na síntese final, que "replay generativo tipicamente depende de um sinal de fronteira de tarefa/contexto" e que isso era um "problema aberto de task-free continual learning". A Fase 5 não apenas confirmou essa previsão — ela revelou o *mecanismo exato* pelo qual a falta desse sinal quebra o sistema: a estatística de rastreamento do consolidador de sono, por precisar se adaptar rápido o suficiente para ser útil durante o aprendizado normal, inevitavelmente "esquece" o que deveria proteger assim que uma nova distribuição de experiência começa a dominar.
 
@@ -137,7 +164,17 @@ Isso sugere que **task-free continual learning via estatísticas de rastreamento
 
 Um segundo achado relevante, de natureza metodológica: **taxa de sucesso em tarefas de navegação é uma métrica enganosa para detectar esquecimento**, porque tarefas com estrutura de recompensa monotônica (like "mais perto é melhor") preservam a ordenação relativa de qualidade das ações mesmo quando a magnitude das previsões degrada completamente. Isso tem implicações para qualquer avaliação de continual learning em RL: métricas de sucesso/recompensa podem mascarar degradação real do modelo subjacente, que só se torna visível em métricas diretas de erro de predição.
 
-## 7. Limitações
+### 8.1 Progresso ou parede já esperada? As duas coisas, mas não da mesma forma
+
+Vale distinguir explicitamente dois tipos de resultado negativo que este trabalho produziu, porque são qualitativamente diferentes.
+
+A Fase 5 encontrou uma **parede estrutural**: nenhuma calibração de hiperparâmetro (geometria da tarefa, pesos de exploração, constantes de tempo) produziu proteção mensurável contra esquecimento — os resultados oscilaram entre nulos e levemente negativos (-0.02%) independentemente do ajuste. Isso é consistente com um mecanismo que está, na sua essência, mal-adequado ao problema: uma única estatística EMA não pode representar simultaneamente "o que é relevante agora" e "o que era relevante antes", e nenhuma quantidade de ajuste fino resolve essa contradição interna. Essa parede já havia sido prevista — não em detalhe, mas em princípio — na síntese do debate original, antes de qualquer linha de código.
+
+A Fase 7, com o mecanismo substituto (Dual-Weight PCN), encontrou algo diferente: um **sinal de progresso real, ainda insuficiente**. Cada correção de design (não apenas ajuste de hiperparâmetro, mas mudanças estruturais pequenas e bem-fundamentadas — de burst único para ensaio contínuo, de uma proporção 1:1 para 4:1) moveu o resultado substancialmente e na direção prevista: 2.84% → 17.79% → 25.09%. Uma curva assim — monotonicamente crescente, com incrementos de magnitude comparável a cada mudança — é o padrão esperado de um mecanismo que funciona e está subdimensionado, não de um mecanismo mal-adequado. Não cruzamos o limiar de 30% dentro do orçamento de tentativas definido a priori, mas não temos evidência de que exista um platô abaixo dele — essa distinção importa para decidir o que fazer a seguir: insistir em mais dosagem (Fase 7) é uma aposta razoável; insistir em mais calibração do mecanismo antigo (Fase 5) já não seria.
+
+Em resumo: a arquitetura como um todo está evoluindo dentro de um limite teórico que já era conhecido (task-free continual learning continua sem solução completa), mas a *qualidade* da aproximação a esse limite mudou de categoria entre uma geração do mecanismo de consolidação e a seguinte.
+
+## 9. Limitações
 
 - **Escala**: todos os experimentos usam redes com no máximo 136 parâmetros de entrada equivalentes (camada `[64,32,16,10]` na Fase 1) e um ambiente de 25 estados discretos (GridWorld 5×5). A equivalência PCN↔backprop está provada na literatura para redes feedforward/CNN/RNN de porte convencional; nada neste trabalho testa ou sugere que isso se mantenha em escalas comparáveis a modelos de linguagem.
 - **Nenhuma validação de hardware real**: a alegação de eficiência energética do substrato local é arquitetural (compatibilidade conceitual com regras event-driven), não medida em watts/joules em silício neuromórfico real.
@@ -145,22 +182,27 @@ Um segundo achado relevante, de natureza metodológica: **taxa de sucesso em tar
 - **Fronteira de tarefa**: a Fase 4 (validada) depende de conhecer o momento exato de transição entre tarefas; a Fase 5 (não validada) mostrou que remover essa dependência quebra o mecanismo nas condições testadas.
 - **Nenhum teste de linguagem ou raciocínio simbólico** foi conduzido — o escopo deste trabalho é estritamente sensório-motor.
 
-## 8. Trabalhos Futuros
+## 10. Trabalhos Futuros
 
-1. **Detecção de mudança de distribuição mais robusta que EMA simples** para disparo de consolidação — por exemplo, testes estatísticos de divergência (KL, variância de janela deslizante) capazes de distinguir ruído de mudança de regime.
-2. **Resolução de task-free continual learning** com um sinal de "surpresa estrutural" (não apenas erro instantâneo) que dispare sono de forma adaptativa, em vez de periódica por contagem fixa de episódios.
-3. **Escalar a rede e o ambiente** gradualmente (grid maior, observação parcial, ações contínuas) para identificar em qual ponto a equivalência PCN↔backprop começa a degradar, se degradar.
-4. **Medição real de eficiência energética** em hardware neuromórfico (ex: simulação em Loihi/NorthPole, ou ao menos contagem de operações event-driven vs densas).
-5. **Investigar métricas de avaliação de continual learning que não sejam enganadas por estrutura de recompensa monotônica** — generalizar a lição da Fase 5 para benchmarks de RL continual mais amplos.
+1. **Determinar se a proporção de ensaio tem um platô ou cruzaria 30% com mais volume.** A Fase 7 parou em 25.09% com proporção 4:1 por um limite de tentativas acordado a priori, não por evidência de um teto assintótico — testar proporções maiores (8:1, 16:1) ou ensaio ponderado por importância (ao estilo Elastic Weight Consolidation) é o próximo experimento óbvio e mais barato.
+2. **Mecanismos de proteção que não dependam só de volume de repetição** — por exemplo, proteger pesos especificamente importantes para Região A (identificados via alguma medida de sensibilidade/Fisher information, como em EWC) em vez de ensaiar amostras genéricas, que competem persistentemente com o volume de dados reais da Região B.
+3. **Detecção de mudança de distribuição mais robusta que EMA simples** para disparo de consolidação — por exemplo, testes estatísticos de divergência (KL, variância de janela deslizante) capazes de distinguir ruído de mudança de regime. (O Dual-Weight PCN, validado na Fase 6, já é uma resposta parcial a este ponto.)
+4. **Escalar a rede e o ambiente** gradualmente (grid maior, observação parcial, ações contínuas) para identificar em qual ponto a equivalência PCN↔backprop começa a degradar, se degradar.
+5. **Medição real de eficiência energética** em hardware neuromórfico (ex: simulação em Loihi/NorthPole, ou ao menos contagem de operações event-driven vs densas).
+6. **Investigar métricas de avaliação de continual learning que não sejam enganadas por estrutura de recompensa monotônica** — generalizar a lição da Fase 5 para benchmarks de RL continual mais amplos.
+7. **Testar com 3+ regiões sucessivas** para caracterizar empiricamente o limite de saturação da Slow Network já previsto teoricamente na Rodada 2 do debate.
 
-## 9. Conclusão
+## 11. Conclusão
 
-Este trabalho validou isoladamente os quatro mecanismos propostos no debate original — aprendizado local equivalente a backprop, unificação de percepção e ação via Active Inference, motivação intrínseca resistente a ruído via Learning Progress, e consolidação sem buffer via sono generativo — com evidência experimental concreta e reproduzível em cada caso. A tentativa de integração revelou, com rigor empírico, exatamente a limitação que a concepção teórica da arquitetura já havia identificado como não resolvida: a dependência de um sinal de fronteira de tarefa para que a consolidação funcione. Isso não invalida a arquitetura — delimita precisamente a fronteira do que ela resolve hoje, e aponta o problema concreto e bem caracterizado que uma continuação deste trabalho precisaria atacar.
+Este trabalho validou isoladamente os quatro mecanismos propostos no debate original — aprendizado local equivalente a backprop, unificação de percepção e ação via Active Inference, motivação intrínseca resistente a ruído via Learning Progress, e consolidação sem buffer via sono generativo — com evidência experimental concreta e reproduzível em cada caso. A primeira tentativa de integração (Fase 5) revelou, com rigor empírico, exatamente a limitação que a concepção teórica da arquitetura já havia identificado como não resolvida: a dependência de um sinal de fronteira de tarefa para que a consolidação funcione. Uma segunda rodada de debate produziu um mecanismo substituto (Dual-Weight PCN) que resolve esse problema de forma mais elegante e o valida isoladamente com margem confortável (Fase 6). A segunda tentativa de integração (Fase 7) demonstrou que esse mecanismo produz proteção real e mensurável — numa trajetória clara de 2.84% para 25.09% de redução de esquecimento conforme a dosagem de ensaio aumenta — mas não o suficiente para cruzar o limiar de 30% dentro do orçamento de tentativas definido a priori. Isso não invalida a arquitetura nem o mecanismo — delimita precisamente a fronteira do que já funciona (Fases 1-4, 6), o que funciona parcialmente e de forma bem caracterizada (Fase 7), e aponta o próximo experimento concreto (dosagem adicional ou proteção por importância de peso) que uma continuação deste trabalho deveria tentar primeiro.
 
 ## Referências
 
+- Adams, R. P., & MacKay, D. J. C. (2007). *Bayesian Online Changepoint Detection*. arXiv:0710.3742.
+- Aljundi, R., Kelchtermans, K., & Tuytelaars, T. (2019). *Task-Free Continual Learning*. CVPR 2019.
 - Behrouz, A., Zhong, P., & Mirrokni, V. (2024). *Titans: Learning to Memorize at Test Time*. arXiv:2501.00663.
 - Burda, Y., Edwards, H., Pathak, D., Storkey, A., Darrell, T., & Efros, A. (2018). *Large-Scale Study of Curiosity-Driven Learning*. arXiv:1808.04355.
+- De Lange, M., & Tuytelaars, T. (2021). *Continual Prototype Evolution: Learning Online from Non-Stationary Data Streams*. ICCV 2021.
 - Friston, K., et al. (2017). *Uncertainty, epistemics and active inference*. Journal of the Royal Society Interface.
 - Friston, K., et al. (2018). *Bayesian model reduction*. arXiv:1805.07092.
 - Kumaran, D., Hassabis, D., & McClelland, J. L. (2016). *What Learning Systems do Intelligent Agents Need? Complementary Learning Systems Theory Updated*. Trends in Cognitive Sciences.

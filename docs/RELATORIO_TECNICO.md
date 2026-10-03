@@ -40,14 +40,25 @@ consolidation/
   tests/test_catastrophic_forgetting.py
   README.md
 
-integration/            — FASE 5, BLOQUEADA (não aprovada)
+integration/            — FASE 5, BLOQUEADA (não aprovada, SleepConsolidator antigo)
   run_unified_agent.py
   tests/test_unified_agent.py
   README.md            — diagnóstico técnico do bloqueio definitivo
 
+dual_weight/            — FASE 6, APROVADA (detector de changepoint Dual-Weight PCN)
+  dual_weight_pcn.py    — classe DualWeightPCN (Fast/Slow Networks, Polyak averaging)
+  tests/test_changepoint_detector.py
+  README.md
+
+integration_v2/          — FASE 7, BLOQUEADA (achado negativo quantificado: 25.09% de 30% exigido)
+  run_integration_experiment.py
+  tests/test_dual_weight_integration.py
+  README.md            — trajetória completa das 3 tentativas (2.84% -> 17.79% -> 25.09%)
+
 docs/
-  DEBATE_ORIGINAL.md    — reconstrução do debate que originou a arquitetura
-  ARTIGO.md             — artigo científico (resultados consolidados)
+  DEBATE_ORIGINAL.md    — reconstrução do debate (Rodada 1) que originou a arquitetura
+  DEBATE_RODADA2.md     — segunda rodada de debate (diagnóstico da Fase 5, mecanismo Dual-Weight PCN)
+  ARTIGO.md             — artigo científico (resultados consolidados, Fases 1-7)
   RELATORIO_TECNICO.md  — este documento
 ```
 
@@ -59,6 +70,11 @@ Todos os comandos abaixo assumem Python 3.x com `numpy`, `torch`, `scikit-learn`
 # Fase 1 — motor PCN vs. backprop
 python pcn_core/run_experiment.py
 pytest pcn_core/tests/ -v
+
+# (Para qualquer script que importe active_inference/agent.py diretamente de outra pasta,
+#  defina PYTHONPATH incluindo a raiz do projeto E active_inference/, ex no Windows:
+#  PYTHONPATH=".;./active_inference" python caminho/do/script.py -- agent.py faz um import
+#  relativo a si mesmo (`from learning_progress import ...`) que exige isso.)
 
 # Fase 2 — Active Inference mínimo (GridWorld)
 python active_inference/run_phase2_experiment.py
@@ -76,11 +92,18 @@ pytest consolidation/tests/ -v
 python integration/run_unified_agent.py
 pytest integration/tests/ -v   # falha no critério de taxa de sucesso — comportamento esperado, ver integration/README.md
 
-# Suite completa das fases validadas (1-4)
-pytest pcn_core/ active_inference/ consolidation/ -q
+# Fase 6 — detector de changepoint Dual-Weight PCN (validado)
+pytest dual_weight/tests/ -v
+
+# Fase 7 — reintegração v2 (BLOQUEADA, achado negativo quantificado: 25.09% de 30%)
+PYTHONPATH=".;./active_inference" python integration_v2/run_integration_experiment.py
+pytest integration_v2/tests/ -v   # falha no critério de 30% — comportamento esperado, ver integration_v2/README.md
+
+# Suite completa das fases validadas (1-4, 6)
+pytest pcn_core/ active_inference/ consolidation/ dual_weight/ -q
 ```
 
-Na última verificação (2026-10-02), a suite completa das Fases 1–4 passa com **13 testes, 0 falhas, ~100 segundos**, sem GPU.
+Na última verificação (2026-10-02), a suite completa das Fases 1–4 e 6 passa com **15 testes, 0 falhas, ~85 segundos**, sem GPU.
 
 ## 4. Decisões de design e bugs encontrados (cronológico)
 
@@ -108,6 +131,14 @@ Restringir a posição inicial de episódios a um subconjunto de colunas (mas to
 
 Mesmo com a geometria corrigida, o `SleepConsolidator` falhou em proteger a Região A durante o treino da Região B. Causa raiz: a estatística de rastreamento (`obs_mean`/`obs_std`, EMA com constante de tempo α=0.02) precisa ser responsiva o suficiente para ser útil durante o aprendizado normal — mas essa mesma responsividade faz com que ela "esqueça" rapidamente a distribuição antiga assim que uma nova distribuição começa a dominar os dados recentes. No momento em que o sono dispara durante a Fase B, ele já está sonhando quase exclusivamente com a Região B, e os "ensaios" gerados não protegem mais nada da Região A. Isso **não é um bug de implementação** — é uma limitação estrutural do mecanismo de EMA simples como sinal de "o que proteger", documentada como tal nas três correções de spec sucessivas (ver nota "Spec de Debate" para o log completo com números de cada tentativa).
 
+### 4.7 Confirmação experimental de uma recomendação deste próprio relatório (Fase 6)
+
+A versão anterior deste relatório recomendava, na seção "Próximos passos" (ver §6 revisado abaixo), manter duas estatísticas de rastreamento em escalas de tempo separadas em vez de uma EMA única. A Rodada 2 do debate (ver `docs/DEBATE_RODADA2.md`) chegou independentemente a uma versão mais forte dessa ideia — duas cópias completas dos PESOS da rede (Dual-Weight PCN), não só duas estatísticas escalares — e a Fase 6 validou isoladamente que o detector de changepoint resultante (divergência Fast-vs-Slow) resiste a exploração intra-tarefa e detecta mudança de regime prontamente. **Lição**: documentar recomendações de "trabalho futuro" com detalhe suficiente para serem testáveis compensa — esta foi retomada e validada poucas iterações depois.
+
+### 4.8 "Funciona, mas não o bastante" é um resultado distinto de "não funciona" (Fase 7)
+
+Ao reintegrar o Dual-Weight PCN num agente de RL completo, a primeira tentativa (burst único de sonhos no changepoint) reduziu o esquecimento em apenas 2.84% — superficialmente parecido com o fracasso total do `SleepConsolidator` antigo na Fase 5. Mas o diagnóstico revelou uma causa diferente e mais tratável: não é que o sinal de changepoint estivesse errado (a Fase 6 já provou que ele funciona), é que um burst único de proteção é diluído por milhares de passos de treino real subsequente sem nenhuma proteção contínua. Trocar por um "modo de proteção permanente" (1 ensaio por passo real, ativado uma vez e nunca desligado) elevou a redução para 17.79%; aumentar a proporção de ensaio para 4:1 elevou para 25.09% — uma trajetória monotonicamente crescente, não um platô. **Lição**: antes de descartar um mecanismo como "insuficiente", verificar se o resultado responde a mais dosagem/volume na direção certa — uma trajetória crescente e um resultado estagnado pedem diagnósticos e próximos passos completamente diferentes.
+
 ## 5. Desvios não-disclosed encontrados pela verificação independente
 
 Registro honesto (para calibrar confiança em resumos futuros de Executores, humanos ou IA):
@@ -117,10 +148,10 @@ Registro honesto (para calibrar confiança em resumos futuros de Executores, hum
 
 ## 6. Estado final e próximos passos concretos
 
-**Aprovado e congelado**: `pcn_core/`, `active_inference/`, `consolidation/`. Não modificar sem motivo explícito — são a base de comparação para qualquer trabalho futuro.
+**Aprovado e congelado**: `pcn_core/`, `active_inference/`, `consolidation/`, `dual_weight/`. Não modificar sem motivo explícito — são a base de comparação para qualquer trabalho futuro.
 
-**Bloqueado, com diagnóstico útil**: `integration/`. Antes de tentar uma 5ª iteração, considerar atacar diretamente a causa raiz (§4.6) em vez de ajustar parâmetros:
+**Bloqueado, com diagnóstico útil**: `integration/` (Fase 5, SleepConsolidator antigo — substituído, não mais o caminho recomendado) e `integration_v2/` (Fase 7, Dual-Weight PCN — chegou a 25.09% de 30% exigido, numa trajetória claramente crescente). Para continuar a partir daqui, atacar diretamente os pontos abaixo em vez de repetir ajustes já esgotados (beta_slow e proporção de ensaio já foram varridos o suficiente para mostrar a tendência):
 
-1. Substituir o rastreamento por EMA simples por um detector de mudança de distribuição real (ex: comparar a variância de uma janela recente contra uma janela histórica; disparar "proteção agressiva" só quando a mudança for estatisticamente significativa, não a cada período fixo).
-2. Alternativamente, manter duas estatísticas de rastreamento em escalas de tempo bem mais separadas (uma rápida, para o comportamento normal; uma muito lenta, server como "memória de longo prazo" das distribuições já vistas) e usar a lenta — não a rápida — para gerar os sonhos de proteção.
-3. Antes de reintegrar, validar a correção da causa raiz em isolamento (como um novo teste unitário do `SleepConsolidator`, no estilo dos testes da Fase 3), sem reintroduzir a complexidade do loop de RL completo — essa foi a abordagem que funcionou bem na Fase 4 e deveria ser repetida.
+1. **Testar proporções de ensaio maiores que 4:1** (8:1, 16:1) para checar se a trajetória 2.84% → 17.79% → 25.09% continua subindo ou satura — essa é a pergunta em aberto mais barata de responder.
+2. **Proteção por importância de peso em vez de volume de repetição** — ao estilo Elastic Weight Consolidation (EWC): em vez de ensaiar amostras genéricas que competem persistentemente com o volume de dados reais da Região B, identificar e proteger especificamente os pesos mais importantes para a Região A (ex: via uma aproximação de Fisher information), permitindo que o resto da rede aprenda B livremente.
+3. **Testar com 3+ regiões sucessivas** para caracterizar empiricamente a saturação da Slow Network já prevista teoricamente (uma única Slow Network deve virar um meio-termo cada vez mais borrado entre todas as tarefas passadas).
