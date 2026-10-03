@@ -55,10 +55,17 @@ integration_v2/          — FASE 7, BLOQUEADA (achado negativo quantificado: 25
   tests/test_dual_weight_integration.py
   README.md            — trajetória completa das 3 tentativas (2.84% -> 17.79% -> 25.09%)
 
+integration_v3/          — FASE 8, APROVADA (replay priorizado suavizado: 64.91% de reducao)
+  run_integration_experiment.py   — sample_dream_cell_action com priorizacao suavizada (alpha=0.5, epsilon=1.0)
+  tests/test_prioritized_sampling.py
+  tests/test_dual_weight_integration_v3.py
+  README.md            — compara as 2 tentativas desta fase (-11.06% -> 64.91%) e com a Fase 7
+
 docs/
   DEBATE_ORIGINAL.md    — reconstrução do debate (Rodada 1) que originou a arquitetura
   DEBATE_RODADA2.md     — segunda rodada de debate (diagnóstico da Fase 5, mecanismo Dual-Weight PCN)
-  ARTIGO.md             — artigo científico (resultados consolidados, Fases 1-7)
+  DEBATE_RODADA3.md     — terceira rodada de debate (observação do usuário sobre atenção/importância, mecanismo de replay priorizado)
+  ARTIGO.md             — artigo científico (resultados consolidados, Fases 1-8)
   RELATORIO_TECNICO.md  — este documento
 ```
 
@@ -99,11 +106,15 @@ pytest dual_weight/tests/ -v
 PYTHONPATH=".;./active_inference" python integration_v2/run_integration_experiment.py
 pytest integration_v2/tests/ -v   # falha no critério de 30% — comportamento esperado, ver integration_v2/README.md
 
-# Suite completa das fases validadas (1-4, 6)
+# Fase 8 — reintegração v3, replay priorizado suavizado (APROVADA: 64.91%)
+PYTHONPATH=".;./active_inference" python integration_v3/run_integration_experiment.py
+pytest integration_v3/tests/ -v   # deve passar 100%
+
+# Suite completa das fases validadas (1-4, 6, 8)
 pytest pcn_core/ active_inference/ consolidation/ dual_weight/ -q
 ```
 
-Na última verificação (2026-10-02), a suite completa das Fases 1–4 e 6 passa com **15 testes, 0 falhas, ~85 segundos**, sem GPU.
+Na última verificação (2026-10-02), a suite completa das Fases 1–4 e 6 passa com **15 testes, 0 falhas, ~85 segundos**, sem GPU. A Fase 8 (`integration_v3/`) passa separadamente com **4 testes, ~131 segundos**, dado o custo computacional do loop de RL completo com ensaio 4:1.
 
 ## 4. Decisões de design e bugs encontrados (cronológico)
 
@@ -139,6 +150,10 @@ A versão anterior deste relatório recomendava, na seção "Próximos passos" (
 
 Ao reintegrar o Dual-Weight PCN num agente de RL completo, a primeira tentativa (burst único de sonhos no changepoint) reduziu o esquecimento em apenas 2.84% — superficialmente parecido com o fracasso total do `SleepConsolidator` antigo na Fase 5. Mas o diagnóstico revelou uma causa diferente e mais tratável: não é que o sinal de changepoint estivesse errado (a Fase 6 já provou que ele funciona), é que um burst único de proteção é diluído por milhares de passos de treino real subsequente sem nenhuma proteção contínua. Trocar por um "modo de proteção permanente" (1 ensaio por passo real, ativado uma vez e nunca desligado) elevou a redução para 17.79%; aumentar a proporção de ensaio para 4:1 elevou para 25.09% — uma trajetória monotonicamente crescente, não um platô. **Lição**: antes de descartar um mecanismo como "insuficiente", verificar se o resultado responde a mais dosagem/volume na direção certa — uma trajetória crescente e um resultado estagnado pedem diagnósticos e próximos passos completamente diferentes.
 
+### 4.9 "Mais importante" não é o mesmo que "mais frequente, sem suavização" (Fase 8)
+
+Substituir a amostragem genérica de sonhos por amostragem proporcional a `visit_count` (ideia validada na Rodada 3 do debate, inspirada em Prioritized Experience Replay) piorou o resultado na primeira tentativa (-11.06%, pior que a gaussiana cega). Causa raiz, confirmada por inspeção direta da distribuição: 95.7% de todas as visitas de treino concentraram-se num único par (célula, ação); os outros 19 pares do conjunto de avaliação — incluindo a própria célula-objetivo, que nunca é visitada por construção (o episódio termina ao alcançá-la) — ficaram essencialmente sem proteção. Isso é o fenômeno de "loss of diversity" que o próprio Schaul et al. (2015) documentou no paper original de Prioritized Experience Replay, e que eles próprios corrigem com priorização suavizada (expoente α<1 sobre a prioridade) em vez de proporcionalidade linear direta. A correção (`(visit_count + ε)^α`, com piso mínimo ε e suavização α=0.5) elevou o resultado para 64.91%. **Lição**: ao operacionalizar uma ideia citada de um paper específico, replicar a formulação COMPLETA do método, não só a intuição central — o paper original quase sempre já documentou e corrigido o modo de falha mais óbvio da versão ingênua.
+
 ## 5. Desvios não-disclosed encontrados pela verificação independente
 
 Registro honesto (para calibrar confiança em resumos futuros de Executores, humanos ou IA):
@@ -150,8 +165,12 @@ Registro honesto (para calibrar confiança em resumos futuros de Executores, hum
 
 **Aprovado e congelado**: `pcn_core/`, `active_inference/`, `consolidation/`, `dual_weight/`. Não modificar sem motivo explícito — são a base de comparação para qualquer trabalho futuro.
 
-**Bloqueado, com diagnóstico útil**: `integration/` (Fase 5, SleepConsolidator antigo — substituído, não mais o caminho recomendado) e `integration_v2/` (Fase 7, Dual-Weight PCN — chegou a 25.09% de 30% exigido, numa trajetória claramente crescente). Para continuar a partir daqui, atacar diretamente os pontos abaixo em vez de repetir ajustes já esgotados (beta_slow e proporção de ensaio já foram varridos o suficiente para mostrar a tendência):
+**Aprovado e congelado (atualização)**: `integration_v3/` (Fase 8) junta-se à lista acima — é o mecanismo de consolidação recomendado, 64.91% de redução de esquecimento, cruza o limiar de 30% com folga.
 
-1. **Testar proporções de ensaio maiores que 4:1** (8:1, 16:1) para checar se a trajetória 2.84% → 17.79% → 25.09% continua subindo ou satura — essa é a pergunta em aberto mais barata de responder.
-2. **Proteção por importância de peso em vez de volume de repetição** — ao estilo Elastic Weight Consolidation (EWC): em vez de ensaiar amostras genéricas que competem persistentemente com o volume de dados reais da Região B, identificar e proteger especificamente os pesos mais importantes para a Região A (ex: via uma aproximação de Fisher information), permitindo que o resto da rede aprenda B livremente.
-3. **Testar com 3+ regiões sucessivas** para caracterizar empiricamente a saturação da Slow Network já prevista teoricamente (uma única Slow Network deve virar um meio-termo cada vez mais borrado entre todas as tarefas passadas).
+**Bloqueado, histórico (não mais o caminho recomendado)**: `integration/` (Fase 5, `SleepConsolidator` antigo) e `integration_v2/` (Fase 7, Dual-Weight PCN com amostragem genérica — chegou a 25.09%, substituído pela amostragem priorizada da Fase 8). Mantidos como registro de diagnóstico, não apagar.
+
+Para continuar a partir do estado aprovado atual (Fase 8), os próximos passos mais informativos são:
+
+1. **Testar com 3+ regiões sucessivas** para caracterizar empiricamente a saturação da Slow Network e do snapshot de `visit_count` (ambos previstos teoricamente como limitados a um número pequeno de transições de tarefa) — essa é a pergunta em aberto mais importante agora que o caso de 2 regiões está resolvido.
+2. **Mecanismo B (EWC local corrigido)**, registrado na Rodada 3 do debate mas não implementado (A foi suficiente): proteção seletiva de peso via Fisher information local (gradiente ao quadrado) com ancoragem — vale testar como complemento caso o cenário de 3+ regiões exija mais do que o replay priorizado sozinho oferece.
+3. **Generalizar o proxy de importância** além de `visit_count` puro, para cenários onde a política de navegação não produza uma distribuição de visitas naturalmente informativa (aqui funcionou porque o agente repete os caminhos que usa de verdade para chegar ao objetivo — isso pode não se generalizar a tarefas com estrutura de recompensa diferente).
