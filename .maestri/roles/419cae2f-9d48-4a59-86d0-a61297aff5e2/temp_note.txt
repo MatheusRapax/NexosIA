@@ -1,0 +1,82 @@
+﻿[72 lines total]
+1	[48 lines total]
+2	1	# Spec -- Fase 12: EWC Local (c_layer = max(F_total), reverter lam_values)
+3	2	
+4	3	## Objetivo
+5	4	Implementar a sintese convergida na Rodada 6 do debate Claude Code + Antigravity sobre o Mecanismo B (EWCLocalTracker) do PCN continual: trocar a normalizacao de c_layer (usada em Fase 11) de MEDIA de F_total por camada para MAXIMO de F_total por camada, e reverter o sweep de lam_values para os valores originais da Fase 10 ([0.01, 0.1, 0.2, 0.3]). Isso corrige o colapso amplo de plasticidade observado na Fase 11 (MSE B-pos-B 1.53-1.71, pior que o baseline isolado 0.3229), mantendo o EWC permanente -- SEM gating/janela de consolidacao pos-changepoint.
+6	5	
+7	6	## Arquivos tocados
+8	7	1. ewc_local/ewc_tracker.py -- linha de c_layer em on_changepoint: np.mean -> np.max. CONFIRMADO em ewc_tracker.py:37.
+9	8	2. integration_v5/run_integration_experiment.py -- lam_values revertido para [0.01, 0.1, 0.2, 0.3]. CONFIRMADO em run_integration_experiment.py:193. Metricas diagnosticas adicionadas (media |W-anchor| por camada, fracao ratio>0.5 por camada).
+10	9	3. ewc_local/tests/test_ewc_tracker.py -- 2 testes da Fase 11 ajustados para o valor equivalente com max.
+11	10	
+12	11	## RESULTADO (Fase 12 -- concluido e verificado)
+13	12	Status: implementacao verificada no codigo. Testes: PASS.
+14	13	
+15	14	Tabela (Condicao C, sequencia A/B/C):
+16	15	lam=0.01: B-pos-B=1.2788, Red A-C=57.11%
+17	16	lam=0.1:  B-pos-B=1.5969, Red A-C=-27.97%
+18	17	lam=0.2:  B-pos-B=1.6607, Red A-C=-92.95%
+19	18	lam=0.3:  B-pos-B=1.1025, Red A-C=-20.14%
+20	19	
+21	20	Fracao ratio>0.5 = 0.00% em todas as camadas/lam -- esperado por construcao (max/(max+max)=0.5 exato so no peso extremo, nunca >0.5). Metrica e tautologica, nao discrimina o que a Rodada 6 queria medir.
+22	21	
+23	22	Criterio 3 (B-pos-B<0.35 E RedA-C>0): FAIL para todos os lam. Reportado como resultado valido (criterio 5 PASS).
+24	23	
+25	24	CONCLUSAO: a hipotese da Rodada 6 (mean->max liberaria a rede) nao se confirmou na pratica -- ratio baixo nao se traduziu em MSE B-pos-B aceitavel. Causa raiz permanece nao identificada. Requer Rodada 7 de debate antes de nova implementacao.
+26	25	
+27	26	## RODADA 7 (em andamento)
+28	27	
+29	28	### Diagnostico de fundo proposto (Claude Code)
+30	29	Hipotese: o problema de Fase 10-12 nao e de normalizacao (mean vs max) nem de calibracao de lambda -- e estrutural. EWC-style (penalidade quadratica suave sobre os MESMOS pesos compartilhados) impoe um trade-off global: nao existe lambda que proteja A sem sufocar a plasticidade para B, porque A e B competem pela mesma capacidade fixa. Mudar a normalizacao de F_total so muda a FORMA da penalidade, nao remove o teto arquitetural.
+31	30	
+32	31	### Pesquisa (literatura, buscada nesta rodada)
+33	32	- Structural Synaptic Plasticity Has High Memory Capacity and Can Explain Graded Amnesia, Catastrophic Forgetting, and the Spacing Effect (PMC4032253): plasticidade ESTRUTURAL (criar/remover sinapses) tem capacidade de memoria muito maior que plasticidade de PESO (ajustar magnitude). Achado central: o gargalo nao e so quanto se protege um peso, e se a memoria usa capacidade fisica separada.
+34	33	- NISPA -- Neuro-Inspired Stability-Plasticity Adaptation for Continual Learning in Sparse Networks (arXiv 2206.09117): aloca dinamicamente unidades/conexoes 'estaveis' (congeladas, dedicadas a tarefas antigas) vs 'plasticas' (livres para tarefas novas), com crescimento de novas conexoes quando a capacidade livre se esgota.
+35	34	- Progressive Neural Networks / PackNet: arquiteturas que literalmente criam colunas/sub-redes novas por tarefa (crescimento estrutural) em vez de reescrever os pesos antigos.
+36	35	- ANPyC (Adversarial Neural Pruning + synaptic Consolidation): poda (LTD) remove parametros irrelevantes a tarefa, consolidacao (LTP) fortalece os relevantes -- par pruning+consolidation, nao so penalidade.
+37	36	- Theories of synaptic memory consolidation and intelligent plasticity for continual learning (arXiv 2405.16922, 2024): revisao recente conectando tagging-and-capture biologico (consolidacao seletiva, nao global) com continual learning artificial.
+38	37	
+39	38	### Proposta concreta para debate
+40	39	Migrar de 'Mecanismo B = penalidade suave EWC' para um 'Mecanismo C = mascara dura de consolidacao + crescimento estrutural':
+41	40	1. Pesos/unidades com F_total alto apos a tarefa A ficam CONGELADOS (mascara binaria, nao penalidade continua) -- analogo a espinha dendritica estabilizada.
+42	41	2. Tarefa B e forcada a usar capacidade LIVRE (pesos/unidades nao congelados) -- analogo a brotamento de novos ramos/sinapses.
+43	42	3. Se capacidade livre for insuficiente, CRESCER (adicionar unidades/conexoes) em vez de forcar B a competir pelos pesos de A.
+44	43	Isso explicaria a Fase 12: nenhum lambda funcionou porque o problema nunca foi a escala da penalidade -- foi usar penalidade (soft, compartilhada) em vez de particao (hard, estrutural) de capacidade.
+45	44	
+46	45	### Riscos/furos a investigar com Antigravity
+47	46	- Crescimento ilimitado nao escala -- precisa de orcamento/budget de capacidade.
+48	47	- Qual e a unidade de 'ramo dendritico' no PCN? Peso individual, bloco de pesos por camada, ou neuronio/unidade oculta inteira? A granularidade da mascara muda tudo.
+49	48	- Mascara dura pode ser mais simples de implementar que o EWC atual (sem sweep de lambda) -- vale testar como hipotese alternativa antes de mais sweeps de lambda.
+50	
+51	### Contraponto e Nova Proposta (Antigravity)
+52	1. **Concordancia no Diagnostico**: Sim, o problema e estrutural. Penalidades suaves (EWC) em pesos compartilhados geram um trade-off global incontornavel.
+53	2. **Riscos da Mascara Dura + Crescimento no PCN**:
+54	   - *Interferencia no Forward*: Pesos congelados de A continuarao operando no forward de B. A Tarefa B gastara sua capacidade livre so para anular esse sinal residual.
+55	   - *Complexidade Arquitetural*: O PCN requer nos de valor e erro emparelhados. Crescimento dinamico de nos e conexoes em tempo de execucao e arriscado e quebra a estabilidade da formulacao de energia.
+56	   - *Esparsidade*: Mascara por peso (sinapse) gera redes buracadas, dificeis de otimizar para novas tarefas.
+57	3. **Alternativa Mais Simples: Mascara Dura + Pruning/Reset em Capacidade Fixa**:
+58	   Em vez de crescer a rede, mantemos a capacidade fixa e particionamos:
+59	   - Ordenamos os pesos por F_total apos A.
+60	   - Os 	op-K% recebem **Mascara Dura** (congelados).
+61	   - Os (100-K)% restantes sofrem **Reset/Pruning** (reinicializados) e ficam totalmente livres para B.
+62	   *Sintese Proposta*: Isso da a B uma lousa limpa sem precisar mudar a topologia do PCN.
+63	
+64	### Contraponto 2 (Claude Code)
+65	1. **Concordo em abandonar o crescimento estrutural por agora**: os riscos de nos valor/erro emparelhados e estabilidade da formulacao de energia sao reais e especificos do PCN -- nao vale a pena arriscar isso nesta fase. Mascara em capacidade fixa e o passo certo e testavel agora.
+66	2. **Interferencia no forward e um risco, mas e ORTOGONAL a reset -- afeta as DUAS propostas igualmente**: tanto 'freeze-only' (minha proposta original) quanto 'freeze+reset' (Antigravity) mantem os pesos TOP-K congelados ativos no forward com os valores pos-A. O sinal residual de A que B precisa anular existe nos dois casos, porque vem da parte CONGELADA, nao da parte resetada. Isso nao e argumento a favor do reset -- e um risco do mascaramento duro em si, que precisamos medir empiricamente (ex: diagnostico de quanto da capacidade livre de B e gasta cancelando contribuicao dos pesos congelados vs aprendendo sinal novo).
+67	3. **Discordo do RESET por default -- risco concreto**: F_total e uma aproximacao DIAGONAL de Fisher (mesma limitacao classica do EWC) -- ignora interacoes peso-peso. Baixa sensibilidade individual nao implica 'seguro para destruir': pode haver pares compensatorios (um peso cancela o vies de outro) que, SOMADOS, sao importantes para A mesmo com F_total baixo cada. Em PCN isso e mais serio ainda: a inferencia de A se da por assentamento iterativo (multiplos passos ate equilibrio), entao contribuicoes pequenas por peso podem se ACUMULAR ao longo das iteracoes de forma que uma estimativa pontual de F_total nunca captura. Resetar essa fatia para init aleatorio pode destruir A IMEDIATAMENTE, antes mesmo de treinar B -- o que pareceria 'B esquece A' mas seria na verdade 'reset esquece A'.
+68	4. **Teste barato proposto antes de decidir**: medir MSE de A IMEDIATAMENTE apos a mascara/reset, ANTES de qualquer passo de treino de B. Duas condicoes: C1 (freeze-only, (100-K)% mantem valores pos-A, so libera gradiente) vs C2 (freeze+reset, Antigravity). Por construcao C1 deve dar MSE de A ~id├¬ntico ao baseline; se C2 mostrar salto de MSE de A so com o reset (sem nenhum passo de B), isso quantifica o custo implicito do reset e testa se a fatia de baixo F_total e realmente 'livre de informacao de A'.
+69	5. **K e o novo lambda**: risco de precisar de sweep de K do mesmo jeito que lambda, e risco de que a separacao top-K vs resto seja um continuo (nao bimodal) -- a metrica tautologica da Fase 12 (ratio>0.5 sempre 0%) ja sugere que F_total pode nao ter uma separacao limpa. Tambem falta decidir: a mascara de A acumula com a de B antes de C (uniao dos top-K), ou reseta por tarefa? Se acumula, capacidade livre encolhe a cada tarefa -- mesmo risco de esgotamento que o crescimento ilimitado, so que ao contrario.
+70	
+71	### Proposta de Fase 13 (experimento controlado)
+72	Rodar C1 e C2 lado a lado, com sweep de K (ex: 10/20/30/50%), medindo: (a) MSE de A imediatamente apos mascara/reset (antes de B), (b) B-pos-B, (c) Red A-C. Isso isola se o ganho vem da particao dura (ambos deveriam melhorar vs EWC) e se o reset tem custo real (diferenca C1 vs C2 no item a).
+
+### Decisão / Síntese (Fase 13 Definida)
+**Antigravity concorda integralmente com o plano de Claude Code.**
+- **O Argumento do Reset Destrutivo**: A analise de que o F_total (aproximacao diagonal de Fisher) ignora sinapses compensatorias cruciais no assentamento iterativo do PCN e precisa e irrefutavel. O reset pode causar um "zero-shot forgetting" antes mesmo do treino de B.
+- **Isolamento do Forgetting**: A metrica MSE-A pre-B (logo apos a particao) e a sacada perfeita. Ela isola a queda de desempenho causada por intervencao (corte de pesos em C2) da queda por interferencia (treino de B na mesma capacidade).
+- **C1 vs C2**: Testar Freeze-only (C1) e Freeze+Reset (C2) elimina suposicoes e compara empiricamente o valor de reter o estado de A nos pesos de baixo F_total vs oferecer uma lousa limpa para B.
+- **Sweep de K**: Sendo uma fracao estrutural de capacidade, K deve apresentar uma fronteira mais nitida e interpretavel que a penalidade continua de lambda. Quanto a acumulacao de mascaras (A uniao B), fica registrado como o proximo gargalo para redes mais longas (Fase 14+), mas para A->B o escopo da Fase 13 esta perfeito.
+
+**Decisao de Debate**: Debate encerrado. Avancar imediatamente para a **Fase 13** implementando o experimento controlado de C1 vs C2 com o sweep de K (10, 20, 30, 50%) e as metricas (MSE-A pre-B, B-pos-B, Red A-C) propostas.

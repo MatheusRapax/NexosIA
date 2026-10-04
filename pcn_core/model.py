@@ -67,6 +67,8 @@ class PredictiveCodingNetwork:
         # Total energy
         energy = sum(0.5 * np.sum(e_l**2) for e_l in e[1:])
         
+        self.last_local_grad = [None] + [np.outer(e[l], x[l-1]) for l in range(1, self.L + 1)]
+        
         # Learning phase
         for l in range(1, self.L + 1):
             dW_l = self.weight_lr * np.outer(e[l], x[l-1])
