@@ -1,0 +1,85 @@
+# Spec -- Fase 13: Mecanismo C (Mascara Dura + Reset em Capacidade Fixa)
+
+## Objetivo
+Implementar a sintese convergida na Rodada 7 do debate Claude Code + Antigravity: substituir a penalidade suave EWC (Mecanismo B, Fases 10-12) por um mecanismo de mascara dura de consolidacao com reset de capacidade livre (Mecanismo C), testando a hipotese de que o problema de Fase 10-12 e estrutural (penalidade suave em pesos compartilhados impoe trade-off global incontornavel), nao de calibracao de normalizacao/lambda. Granularidade: por peso individual. Determinacao de capacidade congelada: sweep de K% (fracao top-K de pesos por F_total congelados).
+
+## Decisoes de design fechadas (nao reabrir sem nova rodada de debate)
+1. Granularidade: mascara por peso individual (elemento da matriz W[l]), nao por bloco/camada nem por unidade/neuronio.
+2. Importancia: reutilizar EXATAMENTE a mesma acumulacao de F_ema/F_total do EWCLocalTracker (update_ema identico: EMA do gradiente local ao quadrado com beta_ema; F_total[l] = gamma*F_total_antigo + F_ema_tarefa_atual, mesmo decaimento gamma).
+3. Selecao da mascara: em cada on_changepoint, por camada, threshold_l = percentil (100*(1-K)) de F_total[l].flatten(); candidatos congelados = F_total[l] >= threshold_l.
+4. Mascara e CUMULATIVA/MONOTONICA: o conjunto congelado real = uniao de todos os conjuntos congelados calculados em changepoints anteriores + candidatos do changepoint atual (OR logico). Um peso congelado NUNCA e descongelado depois. Decisao de projeto explicita -- ver "Risco conhecido" abaixo.
+5. Reset: em todo on_changepoint, TODOS os pesos que nao estao no conjunto congelado cumulativo (apos a uniao) sao reinicializados (Xavier/Glorot uniforme, mesmo limite usado em pcn_core/model.py: sqrt(6/(fan_in+fan_out))), usando um RNG dedicado e deterministico (seed derivada de seed base + indice da camada + contador de changepoints, para reprodutibilidade).
+6. Enforcement: apply_penalty (chamado a cada passo de treino, igual ao call site atual do EWC) forca W[mascara_congelada] = w_anchor[mascara_congelada] (clamp duro, cancelando qualquer atualizacao de gradiente nessas posicoes). Posicoes livres nao sofrem nenhuma operacao.
+7. w_anchor[l] e atualizado a cada on_changepoint = W[l].copy() (pos-reset). Isso ancora os pesos congelados no valor que tinham no momento do changepoint (antes do reset ser aplicado as posicoes livres).
+
+## Risco conhecido (documentar nos diagnosticos, nao resolver nesta fase)
+Como a mascara so cresce (monotonica), a fracao congelada acumulada apos o changepoint B->C pode exceder K% (ex: ~2K% se os conjuntos top-K de A e B nao se sobrepuserem). Isso reduz a capacidade livre disponivel para C. Reportar nos diagnosticos a fracao congelada cumulativa por camada apos cada changepoint para visibilidade. Nao implementar nenhum mecanismo de orcamento/budget nesta fase -- fica para rodada futura se os diagnosticos indicarem problema.
+
+## Arquivos a tocar (todos novos -- NAO modificar ewc_local/, integration_v5/, dual_weight/, pcn_core/, active_inference/, que permanecem como baseline de comparacao)
+1. hard_mask_local/hard_mask_tracker.py (novo) -- classe HardMaskLocalTracker.
+2. hard_mask_local/tests/test_hard_mask_tracker.py (novo) -- testes unitarios.
+3. integration_v6/run_integration_experiment.py (novo, copiado/adaptado de integration_v5/run_integration_experiment.py) -- substitui EWCLocalTracker por HardMaskLocalTracker, sweep de k_values no lugar de lam_values.
+4. integration_v6/tests/test_mechanism_c.py (novo) -- teste de fumaca end-to-end analogo a integration_v5/tests/test_mechanism_b.py (sem crash, fluxo completo A->B->C).
+5. integration_v6/README.md (novo) -- documentar resultados da Fase 13 seguindo o formato de integration_v5/README.md (tabela de calibracao + diagnosticos + conclusao objetiva), mesmo padrao de redacao dos READMEs anteriores.
+
+## Interface de HardMaskLocalTracker (contrato obrigatorio)
+
+class HardMaskLocalTracker:
+    def __init__(self, layer_sizes: list[int], gamma: float = 0.9, beta_ema: float = 0.1, k_frac: float = 0.5, seed: int = 0):
+        # Atributos publicos esperados (mesmo padrao indexado 1..L do EWCLocalTracker):
+        # self.F_ema, self.F_total, self.w_anchor, self.frozen_mask (list de np.ndarray booleano)
+        # self.layer_sizes, self.L, self.gamma, self.beta_ema, self.k_frac
+        ...
+
+    def update_ema(self, local_grad: list[np.ndarray]) -> None:
+        # Identico ao EWCLocalTracker.update_ema: mesma formula, mesmo tratamento de offset
+        # (lista pode ou nao ter None na posicao 0).
+        ...
+
+    def on_changepoint(self, W_current: list[np.ndarray]) -> None:
+        # 1. Acumula F_total com a mesma formula do EWC (decaimento gamma + F_ema da tarefa atual).
+        # 2. Calcula threshold por percentil e candidatos congelados por camada (item 3 acima).
+        # 3. Atualiza frozen_mask cumulativo = OR logico com a mascara anterior (item 4 acima).
+        # 4. Reseta (Xavier, RNG deterministico) todas as posicoes de W_current FORA do frozen_mask
+        #    cumulativo. MUTA W_current in-place (mesma convencao do EWC: lista de arrays por referencia).
+        # 5. w_anchor[l] = W_current[l].copy() (pos-reset).
+        ...
+
+    def apply_penalty(self, W_current: list[np.ndarray]) -> None:
+        # Para cada camada l: W_current[l][frozen_mask[l]] = w_anchor[l][frozen_mask[l]].
+        # Nenhuma outra operacao (sem penalidade suave, sem ratio, sem lam).
+        ...
+
+Mesma convencao de offset (lista com ou sem None na posicao 0) usada em ewc_tracker.py deve ser preservada para compatibilidade com os call sites existentes (dual_weight.fast.last_local_grad[1:], dual_weight.fast.W[1:]).
+
+## Mudancas em integration_v6/run_integration_experiment.py relativas a v5
+- Import: from hard_mask_local.hard_mask_tracker import HardMaskLocalTracker no lugar de EWCLocalTracker.
+- Parametros da funcao de experimento: trocar ewc_lam por hm_k_frac; manter hm_gamma=0.9, hm_beta_ema=0.1 como defaults (mesmos valores do EWC, para comparabilidade).
+- main(): substituir lam_values = [0.01, 0.1, 0.2, 0.3] por k_values = [0.1, 0.25, 0.5, 0.75].
+- Diagnostico pos-B (e pos-C): substituir mean_diff/ratio>0.5 por: (a) fracao congelada cumulativa por camada, (b) mean(abs(W - w_anchor)) restrito as posicoes CONGELADAS (deve ser aproximadamente 0 -- confirma que o clamp esta funcionando; qualquer desvio > 1e-9 e bug), (c) fracao de posicoes livres que foram resetadas neste changepoint especifico.
+- Preservar protocolo experimental identico ao v5: mesmo GridWorld, mesmas regioes A/B/C, num_eps_per_region=225, seed=42, sleep_enabled=True. Baselines res_a/res_b ja hardcoded no v5 permanecem validos para comparacao (NAO re-rodar Mecanismo A/B).
+
+## Criterios de aceite
+1. pytest hard_mask_local/tests/ -- 100% PASS, cobrindo no minimo:
+   - update_ema/acumulacao de F_total com paridade numerica em relacao a formula do EWC (adaptar test_multiple_changepoints_decay).
+   - Fracao congelada apos o 1o changepoint aproximadamente igual a k_frac (tolerancia de arredondamento de percentil).
+   - Reset muda valores nas posicoes livres e NAO muda valores nas posicoes congeladas.
+   - apply_penalty recoloca w_anchor exatamente nas posicoes congeladas mesmo apos o peso ter sido alterado externamente; nao toca posicoes livres.
+   - Monotonicidade: um peso congelado no changepoint 1 permanece congelado e com o MESMO valor de w_anchor apos o changepoint 2, mesmo que seu F_total relativo nao estivesse mais no top-K do changepoint 2 isoladamente.
+2. pytest integration_v6/tests/ -- smoke test end-to-end sem excecoes, analogo a test_mechanism_b.py.
+3. python integration_v6/run_integration_experiment.py roda sem erro para todos os k_values e imprime: tabela de calibracao (mesmas 8 colunas do formato v5) + tabela de diagnosticos (fracao congelada cumulativa por camada, mean abs(W-w_anchor) em congelados, fracao resetada).
+4. integration_v6/README.md documenta a tabela de resultados, os diagnosticos, e uma conclusao objetiva: para quais K (se algum) o criterio B-pos-B < 0.35 E RedA-C > 0 foi satisfeito. Resultado negativo e valido e deve ser reportado como tal (mesmo padrao da Fase 12).
+5. Nenhum arquivo em ewc_local/, integration_v5/, dual_weight/, pcn_core/, active_inference/ e modificado.
+6. Suite de testes pre-existente inteira continua passando (pytest na raiz do projeto, sem regressoes).
+
+## Constraints
+- Nao implementar crescimento estrutural (growth) nesta fase -- apenas mascara dura + reset em capacidade fixa, conforme Rodada 7.
+- Nao reabrir a escolha de granularidade (peso individual) nem o metodo de determinacao de K (sweep) sem nova rodada de debate.
+- Resumo de execucao (Executor -> nota spec) deve ter no maximo 200 palavras.
+
+
+## RESULTADO FASE 13
+Status: concluído
+Arquivos tocados: hard_mask_local/hard_mask_tracker.py, hard_mask_local/tests/test_hard_mask_tracker.py, integration_v6/run_integration_experiment.py, integration_v6/tests/test_mechanism_c.py, integration_v6/README.md
+Testes: passou
+Notas: Nenhum K satisfez B-pos-B < 0.35. A máscara dura estancou o esquecimento perfeitamente, mas exauriu a capacidade livre rapidamente (K=0.5 chega a 100% de ocupação na primeira camada), causando colapso na aprendizagem B-pos-B. Hipótese validada. (Testes de v1/v2 pre-existentes falharam independentemente).
