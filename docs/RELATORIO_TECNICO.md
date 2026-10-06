@@ -133,6 +133,9 @@ docs/
   DEBATE_RODADA13.md    — décima terceira rodada (Mecanismo F — Poda Sináptica Seletiva via vazamento + reciclagem, em vez de proteção pura; sequenciamento de isolamento proposto)
   DEBATE_RODADA14.md    — décima quarta rodada (correção do viés de recência no critério de poda — EMA substituído por pico histórico de EMA, evitando repetir o defeito do LRU descartado na Rodada 11)
   DEBATE_RODADA15.md    — décima quinta rodada (outras opções para os 2 gargalos: acumulador de importância O(1) para o Mecanismo A, e detector CUSUM/Page-Hinkley para o changepoint instável)
+  DEBATE_RODADA16.md    — décima sexta rodada (harness de teste rápido reutilizável; Mecanismo G — competição lateral gateada por contexto via GatingLocalTracker, baseado em Ororbia & Mali 2022)
+  DEBATE_RODADA17.md    — décima sétima rodada (Mecanismo H — esquecimento calibrado por confiança/variância do gradiente, inspirado em BayesPCN; decaimento contínuo, sem reset em lote)
+  DEBATE_RODADA18.md    — décima oitava rodada (Mecanismo I — alocação fixa e disjunta de capacidade por tarefa; extensão do probe_harness para avaliação com oráculo de tarefa)
   ARTIGO.md             — artigo científico (resultados consolidados, Fases 1-17)
   RELATORIO_TECNICO.md  — este documento
 ```
@@ -310,6 +313,10 @@ Ao encontrar a colisao de modulo acima durante a verificacao independente da Fas
 
 Ao propor um fallback para quando a máscara cumulativa de gates se esgota, o Arquiteto sugeriu LRU (least-recently-used) — uma política de eviction madura e amplamente usada em caches, onde o objetivo é manter "quente" (frequentemente acessado) e descartar "frio" (não tocado há muito tempo). O Executor, no papel de debate, identificou que essa semântica é exatamente INVERTIDA no contexto de proteção de memória contra esquecimento: aqui, "não tocado há muito tempo" é sinônimo de "protegido com sucesso até agora" — exatamente o que se quer preservar, não descartar. Aplicar LRU sem essa inversão de semântica criaria uma falha autorrealizável, reciclando deterministicamente a tarefa mais antiga sempre que a capacidade se esgotasse. **Lição**: importar uma técnica madura de um domínio adjacente (aqui, sistemas/cache) exige verificar explicitamente se o OBJETIVO da técnica (o que ela otimiza) coincide com o objetivo do problema atual, não só se o MECANISMO (a lógica de "o que descartar quando a capacidade acaba") se encaixa estruturalmente — os dois problemas tinham a mesma forma (capacidade fixa, política de reciclagem) mas objetivos opostos (preservar o recente vs. preservar o antigo).
 
+### 4.20 Bug de ferramenta: `echo`/redirecionamento do PowerShell em UTF-16 corrompeu um arquivo real do repositório (Rodada 16)
+
+Ao acrescentar o resultado do Mecanismo G a este arquivo, o Executor usou um comando estilo `echo "texto..." >> docs/RELATORIO_TECNICO.md` no PowerShell. Diferente do bug já documentado em §4.1 (que corrompia apenas uma nota efêmera do Maestri), aqui o alvo era um arquivo real rastreado pelo git: o `echo`/redirecionamento do PowerShell grava por padrão em UTF-16LE, então o texto acrescentado ficou com um byte `\x00` intercalado em cada caractere (confirmado por `file` reportando o arquivo como `data` em vez de texto, e por 1011 bytes nulos a partir do ponto exato da inserção). O conteúdo em si estava correto — só a codificação da escrita. A correção exigiu decodificar o trecho afetado como UTF-16LE (preservando o restante do arquivo, já em UTF-8) e regravar o arquivo inteiro em UTF-8 puro, verificado via `python3 -c "open(...).decode('utf-8')"` e `file` antes de aceitar a correção. **Lição**: qualquer escrita em arquivo de texto via PowerShell (`echo`, `Out-File`, redirecionamento `>`/`>>`) precisa de `-Encoding utf8` explícito ou deve usar uma ferramenta de edição de arquivo dedicada (não redirecionamento de shell) — isso vale tanto para notas efêmeras (§4.1) quanto, com risco maior, para arquivos reais do repositório, onde a corrupção pode ser commitada antes de ser notada. A verificação independente do Arquiteto (`git diff` retornando "Binary files differ" em vez de um diff de texto) foi o que revelou o problema antes que fosse commitado.
+
 ## 5. Desvios não-disclosed encontrados pela verificação independente
 
 Registro honesto (para calibrar confiança em resumos futuros de Executores, humanos ou IA):
@@ -369,3 +376,18 @@ Para continuar a partir do estado atual (Fases 1-17 concluídas, mais as Rodadas
 **Concluído, resultado negativo bem caracterizado**: `dream_sampling_probe/` (Rodada 15) — Refutou a hipótese de que o esquecimento da Fase 9 se devia apenas à sub-amostragem das tarefas antigas nos sonhos. Acumular a importância via EMA para forçar a representação da Tarefa A destruiu a proteção da Tarefa B (Red. B-pos-C caiu de +51% para -12%) sem salvar a Tarefa A (continuou em -17%). Conclusão: forçar sonhos antigos numa rede já saturada causa interferência catastrófica; o gargalo é capacidade, reforçando a necessidade do Mecanismo F (Poda Sináptica/Reciclagem).
 
 **Concluído, resultado diagnóstico positivo**: `changepoint_detector_probe/` (Rodada 15) — Substituir o gatilho fixo por um teste estatístico online (Page-Hinkley) estabilizou a contagem de changepoints entre diferentes `gate_frac` (41 -> 42 -> 43), eliminando a variância não-monotônica extrema da Fase 17 (12 -> 4 -> 5). Isso comprova que a instabilidade anterior era uma falha do detector original ao lidar com ruído, e não uma perturbação insolúvel induzida pelo próprio gating.
+
+### Rodada 16: Probe Harness e Mecanismo G (Inibição Lateral Contextual)
+- **Objetivo**: Testar inibição lateral guiada por gate contextual (Mecanismo G-v2) comparada a uma baseline incondicional por janela temporal (G-lite), utilizando a infraestrutura modular `probe_harness` recém-criada.
+- **Resultados**: Nenhuma variante superou o Baseline. G-lite teve performance quase idêntica ao Baseline, enquanto G-v2 sofreu degradação massiva semelhante ao Gating-only (Mecanismo D isolado).
+- **Decisão**: A infraestrutura do harness foi validada com sucesso, mas o Mecanismo G provou-se ineficaz como mecanismo autônomo de mitigação.
+
+### Rodada 17: Mecanismo H (Esquecimento Calibrado por Confiança)
+- **Objetivo**: Testar um esquecimento contínuo modulado pela precisão/variância do gradiente bruto de cada sinapse (inspirado em BayesPCN), comparando com a reciclagem discreta da Rodada 14.
+- **Resultados**: O Mecanismo H falhou severamente. Com redução de desempenho A-pos-C de -146.52% em relação à baseline (pior inclusive que a Poda da Rodada 14, que obteve -133.89%), o mecanismo contínuo erodiu o conhecimento previamente aprendido.
+- **Decisão**: A erosão contínua em direção a zero baseada apenas na confiança individual das sinapses é destrutiva em representações altamente distribuídas. O mecanismo foi refutado.
+
+### Rodada 18: Mecanismo I (Alocação Fixa de Capacidade)
+- **Objetivo**: Testar alocação disjunta e fixa de capacidade (1/3 por tarefa) contra o gating dinâmico aleatório, utilizando um Oráculo de Tarefa estendido no harness, para isolar a falha do Mecanismo D (overlap vs déficit de capacidade).
+- **Resultados**: O Mecanismo I obteve erro inicial perfeito (A-pos-A = 0.0152), refutando déficit de capacidade. Pela primeira vez no projeto, produziu uma melhoria dramática na retenção em relação ao baseline para a tarefa intermediária (Redução B-pos-C de +61.42%). Contudo, A-pos-C continuou marginalmente pior que o baseline (-41.77%).
+- **Decisão**: A sobreposição dinâmica era de fato o que destruía as memórias. Com a alocação perfeitamente isolada, a única interferência que resta origina-se dos parâmetros de saída globalmente compartilhados (especialmente os vieses `b[L]`). O conceito de gating estrutural foi resgatado e validado.
